@@ -1,0 +1,43 @@
+name: Build Windows VST3
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/AcidGlitch_artefacts/Release/VST3/AcidGlitch.vst3 -DestinationPath AcidGlitch-Windows-VST3.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AcidGlitch-Windows-VST3
+          path: AcidGlitch-Windows-VST3.zip
+
+      # Publishes the zip on the repo's Releases page so it is one click to download.
+      - name: Publish latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest AcidGlitch-Windows-VST3.zip \
+            --title "AcidGlitch (latest build)" \
+            --notes "Unzip, then copy the AcidGlitch.vst3 folder into C:\\Program Files\\Common Files\\VST3 and rescan plugins in FL Studio." \
+            --target "${{ github.sha }}"
