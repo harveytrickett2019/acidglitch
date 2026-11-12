@@ -19,7 +19,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AcidGlitchProcessor::createL
     // synth
     l.add (std::make_unique<APF> (id ("tune"),    "Tune",      Range (-12.0f, 12.0f, 0.01f), 0.0f));
     l.add (std::make_unique<APF> (id ("wave"),    "Wave",      Range (0.0f, 1.0f, 0.01f), 0.0f));
-    l.add (std::make_unique<APF> (id ("cutoff"),  "Cutoff",    skewed (40.0f, 8000.0f, 1.0f, 600.0f), 420.0f));
+    l.add (std::make_unique<APF> (id ("cutoff"),  "Cutoff",    skewed (30.0f, 16000.0f, 1.0f, 900.0f), 700.0f));
     l.add (std::make_unique<APF> (id ("reso"),    "Resonance", Range (0.0f, 1.0f, 0.01f), 0.78f));
     l.add (std::make_unique<APF> (id ("envmod"),  "Env Mod",   Range (0.0f, 1.0f, 0.01f), 0.55f));
     l.add (std::make_unique<APF> (id ("decay"),   "Decay",     skewed (0.05f, 2.5f, 0.01f, 0.5f), 0.35f));
@@ -27,6 +27,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AcidGlitchProcessor::createL
     l.add (std::make_unique<APF> (id ("slide"),   "Slide",     Range (10.0f, 300.0f, 1.0f), 60.0f));
     l.add (std::make_unique<APF> (id ("drive"),   "Drive",     Range (0.0f, 1.0f, 0.01f), 0.35f));
     l.add (std::make_unique<APF> (id ("volume"),  "Volume",    Range (0.0f, 1.0f, 0.01f), 0.7f));
+
+    l.add (std::make_unique<juce::AudioParameterChoice> (id ("source"), "Source",
+                                                         juce::StringArray { "303 Synth", "Sample A", "Sample B", "Sample C", "Sample D" }, 0));
 
     // sequencer
     l.add (std::make_unique<juce::AudioParameterBool>   (id ("seq"),    "Sequencer", true));
@@ -63,6 +66,8 @@ AcidGlitchProcessor::AcidGlitchProcessor()
     pRoot = get ("root");       pScale = get ("scale");   pDensity = get ("density");
     pGChance = get ("gchance"); pGType = get ("gtype");   pGMix = get ("gmix");
     pCrush = get ("crush");     pDown = get ("down");
+    pSource = get ("source");
+    formats.registerBasicFormats();
 
     acid::generatePattern (engine.pattern, 303u, 1, 0.8f);   // default pattern
 }
@@ -112,7 +117,25 @@ void AcidGlitchProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     if (numSamples == 0) return;
     if ((int) mono.size() < numSamples) mono.resize ((size_t) numSamples);   // host ignored the block size hint
 
-    const acid::EngineParams p = readParams();
+    acid::EngineParams p = readParams();
+
+    // Sample source. The lock is only contended for an instant while a file is
+    // being swapped in; if that happens (or the slot is empty) play silence.
+    static const float silence[2] = { 0.0f, 0.0f };
+    const juce::SpinLock::ScopedTryLockType sampleGuard (sampleLock);
+    const int source = (int) pSource->load();
+    if (source >= 1 && source <= numSlots)
+    {
+        p.sample = silence;
+        p.sampleLen = 2;
+        if (sampleGuard.isLocked())
+            if (const auto& sd = slots[(size_t) (source - 1)])
+            {
+                p.sample = sd->data.data();
+                p.sampleLen = (int) sd->data.size();
+                p.sampleRate = sd->sampleRate;
+            }
+    }
 
     acid::Transport t;
     if (auto* ph = getPlayHead())
@@ -170,10 +193,76 @@ void AcidGlitchProcessor::clearPattern()
     }
 }
 
+bool AcidGlitchProcessor::loadSample (int slot, const juce::File& file)
+{
+    if (slot < 0 || slot >= numSlots) return false;
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->lengthInSamples <= 0 || reader->numChannels == 0) return false;
+
+    // keep at most 20 seconds, mixed to mono and normalised
+    const int n = (int) juce::jmin<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 20.0));
+    juce::AudioBuffer<float> buf ((int) reader->numChannels, n);
+    reader->read (&buf, 0, n, 0, true, true);
+
+    auto sd = std::make_shared<SampleData>();
+    sd->sampleRate = reader->sampleRate;
+    sd->data.assign ((size_t) n, 0.0f);
+    for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+        juce::FloatVectorOperations::add (sd->data.data(), buf.getReadPointer (ch), n);
+    const auto range = juce::FloatVectorOperations::findMinAndMax (sd->data.data(), n);
+    const float peak = juce::jmax (std::abs (range.getStart()), std::abs (range.getEnd()));
+    if (peak > 1.0e-5f)
+        juce::FloatVectorOperations::multiply (sd->data.data(), 1.0f / peak, n);
+
+    {
+        const juce::SpinLock::ScopedLockType lock (sampleLock);
+        slots[(size_t) slot].swap (sd);
+    }   // the previous sample (now in sd) is freed here, outside the lock
+    const juce::ScopedLock nl (nameLock);
+    slotNames[(size_t) slot] = file.getFileName();
+    slotPaths[(size_t) slot] = file.getFullPathName();
+    return true;
+}
+
+void AcidGlitchProcessor::clearSample (int slot)
+{
+    if (slot < 0 || slot >= numSlots) return;
+    std::shared_ptr<SampleData> old;
+    {
+        const juce::SpinLock::ScopedLockType lock (sampleLock);
+        slots[(size_t) slot].swap (old);
+    }
+    const juce::ScopedLock nl (nameLock);
+    slotNames[(size_t) slot].clear();
+    slotPaths[(size_t) slot].clear();
+}
+
+juce::String AcidGlitchProcessor::getSampleName (int slot) const
+{
+    if (slot < 0 || slot >= numSlots) return {};
+    const juce::ScopedLock nl (nameLock);
+    return slotNames[(size_t) slot];
+}
+
+void AcidGlitchProcessor::selectSource (int index)
+{
+    if (auto* param = apvts.getParameter ("source"))
+    {
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->convertTo0to1 ((float) index));
+        param->endChangeGesture();
+    }
+}
+
 void AcidGlitchProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("pattern", juce::String (engine.pattern.toString()), nullptr);
+    {
+        const juce::ScopedLock nl (nameLock);
+        for (int i = 0; i < numSlots; ++i)
+            state.setProperty ("sample" + juce::String (i), slotPaths[(size_t) i], nullptr);
+    }
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -185,6 +274,12 @@ void AcidGlitchProcessor::setStateInformation (const void* data, int sizeInBytes
         auto state = juce::ValueTree::fromXml (*xml);
         if (! state.isValid() || ! state.hasType (apvts.state.getType())) return;
         engine.pattern.fromString (state.getProperty ("pattern").toString().toStdString());
+        for (int i = 0; i < numSlots; ++i)
+        {
+            const juce::File file (state.getProperty ("sample" + juce::String (i)).toString());
+            if (! (file.existsAsFile() && loadSample (i, file)))
+                clearSample (i);
+        }
         apvts.replaceState (state);
     }
 }

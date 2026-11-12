@@ -63,7 +63,9 @@ private:
     bool paintValue = false;
 };
 
-class AcidGlitchEditor : public juce::AudioProcessorEditor
+class AcidGlitchEditor : public juce::AudioProcessorEditor,
+                         public juce::FileDragAndDropTarget,
+                         private juce::Timer
 {
 public:
     explicit AcidGlitchEditor (AcidGlitchProcessor&);
@@ -71,7 +73,15 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
 private:
+    void timerCallback() override;
+    void slotClicked (int slot);
+    void chooseFile (int slot);
+    void loadInto (int slot, const juce::File& file);
+
     using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
@@ -84,13 +94,16 @@ private:
     Knob swing, length, density;
     Knob gchance, gmix, crush, down;
 
-    juce::ComboBox rate, root, scale, gtype;
-    std::unique_ptr<ComboAttachment> rateAtt, rootAtt, scaleAtt, gtypeAtt;
+    juce::ComboBox rate, root, scale, gtype, source;
+    std::unique_ptr<ComboAttachment> rateAtt, rootAtt, scaleAtt, gtypeAtt, sourceAtt;
+    std::array<juce::TextButton, AcidGlitchProcessor::numSlots> slotButtons;
+    std::unique_ptr<juce::FileChooser> chooser;
+    juce::TooltipWindow tooltips { this, 600 };
     juce::TextButton seqButton { "SEQ" }, randomise { "RANDOMISE" }, mutate { "MUTATE" }, clear { "CLEAR" };
     std::unique_ptr<ButtonAttachment> seqAtt;
 
     StepGrid grid;
-    juce::Rectangle<int> synthPanel, seqPanel, glitchPanel, gridPanel;
+    juce::Rectangle<int> sourcePanel, synthPanel, seqPanel, glitchPanel, gridPanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AcidGlitchEditor)
 };

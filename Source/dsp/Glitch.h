@@ -17,7 +17,8 @@ public:
         sr = (float) sampleRate;
         buf.assign ((size_t) (sampleRate * 4.0) + 16, 0.0f);
         size = (int) buf.size();
-        w = 0; active = false; held = 0.0f; holdPhase = 0.0f;
+        w = 0; active = false; held = 0.0f; holdPhase = 0.0f; crushLp = 0.0f;
+        crushLpCoef = 1.0f - std::exp (-6.2831853f * 9000.0f / sr);
     }
 
     // lengthSamples = how long the event lasts (one sequencer step)
@@ -104,8 +105,16 @@ public:
         const float c = std::max (crush, active ? extra : 0.0f);
         if (c > 0.001f)
         {
-            const float q = std::exp2 (15.0f - c * 13.0f);
+            // 15 bits down to about 4, with most of the knob travel in the subtle range,
+            // then a soft low-pass to take the fizz off the quantisation noise
+            const float q = std::exp2 (15.0f - 11.0f * c * std::sqrt (c));
             out = std::round (out * q) / q;
+            crushLp += (out - crushLp) * crushLpCoef;
+            out = crushLp;
+        }
+        else
+        {
+            crushLp = out;
         }
 
         if (++w >= size) w = 0;
@@ -125,7 +134,7 @@ private:
     }
 
     std::vector<float> buf;
-    float sr = 44100.0f, rateStep = 1.0f, extra = 0.0f, held = 0.0f, holdPhase = 0.0f;
+    float sr = 44100.0f, rateStep = 1.0f, extra = 0.0f, held = 0.0f, holdPhase = 0.0f, crushLp = 0.0f, crushLpCoef = 1.0f;
     double tapePos = 0.0;
     int size = 0, w = 0, startW = 0, t0 = 0, len = 0, slice = 0, fade = 64;
     Type type = Stutter;

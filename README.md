@@ -19,6 +19,10 @@ pattern generator, and a glitch section (stutter, reverse, tape stop, bitcrush, 
 - **RANDOMISE** writes a new bassline in the chosen scale; **MUTATE** changes a few steps.
 - In the pattern grid, drag in the note row to set pitch and click the rows below to toggle
   gate, accent, slide and glitch per step.
+- **SOURCE**: choose the built-in 303 synth or one of four sample slots. Click a slot (or drop
+  a file on it) to load a bass sample (WAV, AIFF, FLAC, MP3). The pattern's root step plays the
+  sample at its original pitch and other steps transpose it; use **Tune** to match your key.
+  Samples still run through the filter, accent, slide, drive and glitch section.
 - **GLITCH**: flagged steps always glitch; *Chance* adds random glitches on other steps.
 
 If the plugin goes silent in FL Studio when no notes are playing, turn off **Smart disable**

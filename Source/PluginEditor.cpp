@@ -226,6 +226,15 @@ AcidGlitchEditor::AcidGlitchEditor (AcidGlitchProcessor& p)
     initCombo (root,  rootAtt,  "root");
     initCombo (scale, scaleAtt, "scale");
     initCombo (gtype, gtypeAtt, "gtype");
+    initCombo (source, sourceAtt, "source");
+
+    for (int i = 0; i < AcidGlitchProcessor::numSlots; ++i)
+    {
+        auto& b = slotButtons[(size_t) i];
+        b.setTooltip ("Click to load a bass sample (or drop a file here). The pattern's root step plays it at its original pitch.");
+        b.onClick = [this, i] { slotClicked (i); };
+        addAndMakeVisible (b);
+    }
 
     seqButton.setClickingTogglesState (true);
     seqButton.setTooltip ("On: plays the pattern. Off: plays MIDI notes as a mono synth.");
@@ -241,7 +250,84 @@ AcidGlitchEditor::AcidGlitchEditor (AcidGlitchProcessor& p)
     clear.onClick     = [this] { proc.clearPattern();     grid.repaint(); };
 
     addAndMakeVisible (grid);
-    setSize (900, 600);
+    setSize (900, 654);
+    timerCallback();
+    startTimerHz (8);
+}
+
+void AcidGlitchEditor::timerCallback()
+{
+    static const char* letters[] = { "A", "B", "C", "D" };
+    const int current = (int) proc.apvts.getRawParameterValue ("source")->load();
+    for (int i = 0; i < AcidGlitchProcessor::numSlots; ++i)
+    {
+        auto& b = slotButtons[(size_t) i];
+        const auto name = proc.getSampleName (i);
+        b.setButtonText (juce::String (letters[i]) + "   " + (name.isEmpty() ? juce::String ("click to load") : name));
+        b.setToggleState (current == i + 1, juce::dontSendNotification);
+    }
+}
+
+void AcidGlitchEditor::loadInto (int slot, const juce::File& file)
+{
+    if (proc.loadSample (slot, file))
+        proc.selectSource (slot + 1);
+    else
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "AcidGlitch",
+                                                "Couldn't read " + file.getFileName() + ". Try a WAV, AIFF, FLAC or MP3 file.");
+    timerCallback();
+}
+
+void AcidGlitchEditor::chooseFile (int slot)
+{
+    chooser = std::make_unique<juce::FileChooser> ("Load a bass sample", juce::File(),
+                                                   "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this, slot] (const juce::FileChooser& fc)
+                          {
+                              const auto file = fc.getResult();
+                              if (file.existsAsFile()) loadInto (slot, file);
+                          });
+}
+
+void AcidGlitchEditor::slotClicked (int slot)
+{
+    if (proc.getSampleName (slot).isEmpty()) { chooseFile (slot); return; }
+
+    juce::PopupMenu menu;
+    menu.addItem (1, "Use this sample");
+    menu.addItem (2, "Load a different sample...");
+    menu.addItem (3, "Remove");
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (slotButtons[(size_t) slot]),
+                        [this, slot] (int choice)
+                        {
+                            if (choice == 1) proc.selectSource (slot + 1);
+                            if (choice == 2) chooseFile (slot);
+                            if (choice == 3)
+                            {
+                                proc.clearSample (slot);
+                                if ((int) proc.apvts.getRawParameterValue ("source")->load() == slot + 1)
+                                    proc.selectSource (0);
+                            }
+                            timerCallback();
+                        });
+}
+
+void AcidGlitchEditor::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    if (files.isEmpty()) return;
+    int slot = -1;
+    for (int i = 0; i < AcidGlitchProcessor::numSlots; ++i)
+        if (slotButtons[(size_t) i].getBounds().contains (x, y))
+            slot = i;
+    if (slot < 0)   // dropped elsewhere: first empty slot, else slot A
+    {
+        slot = 0;
+        for (int i = AcidGlitchProcessor::numSlots - 1; i >= 0; --i)
+            if (proc.getSampleName (i).isEmpty())
+                slot = i;
+    }
+    loadInto (slot, juce::File (files[0]));
 }
 
 AcidGlitchEditor::~AcidGlitchEditor()
@@ -281,6 +367,10 @@ void AcidGlitchEditor::paint (juce::Graphics& g)
         g.setFont (ui::font (11.0f, true));
         g.drawText (title, r.getX() + 12, r.getY() + 6, 200, 14, juce::Justification::centredLeft);
     };
+    drawPanel (sourcePanel, {},         ui::acid);
+    g.setColour (ui::acid);
+    g.setFont (ui::font (11.0f, true));
+    g.drawText ("SOURCE", sourcePanel.getX() + 12, sourcePanel.getY(), 60, sourcePanel.getHeight(), juce::Justification::centredLeft);
     drawPanel (synthPanel,  "SYNTH",    ui::acid);
     drawPanel (seqPanel,    "SEQUENCE", ui::acid);
     drawPanel (glitchPanel, "GLITCH",   ui::glitch);
@@ -309,6 +399,19 @@ void AcidGlitchEditor::resized()
     root.setBounds (controls.removeFromLeft (70));
     controls.removeFromLeft (10);
     scale.setBounds (controls);
+
+    area.removeFromTop (8);
+    sourcePanel = area.removeFromTop (46);
+    {
+        auto row = sourcePanel.reduced (10, 10).withTrimmedLeft (58);
+        source.setBounds (row.removeFromLeft (124));
+        const int w = (row.getWidth() - 4 * 8) / AcidGlitchProcessor::numSlots;
+        for (auto& b : slotButtons)
+        {
+            row.removeFromLeft (8);
+            b.setBounds (row.removeFromLeft (w));
+        }
+    }
 
     area.removeFromTop (8);
     synthPanel = area.removeFromTop (128);

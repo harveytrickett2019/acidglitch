@@ -37,6 +37,13 @@ public:
     void mutatePattern();
     void clearPattern();
 
+    // Sample slots: the sequencer can play a loaded sample instead of the synth.
+    static constexpr int numSlots = 4;
+    bool loadSample (int slot, const juce::File& file);
+    void clearSample (int slot);
+    juce::String getSampleName (int slot) const;
+    void selectSource (int index);          // 0 = synth, 1..numSlots = sample slot
+
     juce::AudioProcessorValueTreeState apvts;
     acid::Engine engine;
 
@@ -47,6 +54,19 @@ private:
     std::atomic<float>* pTune, *pWave, *pCutoff, *pReso, *pEnvMod, *pDecay, *pAccent, *pSlide, *pDrive, *pVolume;
     std::atomic<float>* pSeq, *pRate, *pSwing, *pLength, *pRoot, *pScale, *pDensity;
     std::atomic<float>* pGChance, *pGType, *pGMix, *pCrush, *pDown;
+
+    std::atomic<float>* pSource;
+
+    struct SampleData
+    {
+        std::vector<float> data;
+        double sampleRate = 44100.0;
+    };
+    juce::AudioFormatManager formats;
+    juce::SpinLock sampleLock;                              // audio thread only ever try-locks
+    std::array<std::shared_ptr<SampleData>, numSlots> slots;
+    juce::CriticalSection nameLock;
+    std::array<juce::String, numSlots> slotNames, slotPaths;
 
     std::vector<float> mono;
     juce::Random random;

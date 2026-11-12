@@ -44,6 +44,20 @@ int main (int argc, char** argv)
 
     acid::EngineParams p;
     p.glitchChance = chance;
+    p.crush = argc > 4 ? (float) std::atof (argv[4]) : 0.0f;
+
+    // optional 5th argument "sample": play a synthetic plucked-bass sample instead of the synth
+    std::vector<float> smp;
+    if (argc > 5)
+    {
+        smp.resize (22050);
+        for (size_t i = 0; i < smp.size(); ++i)
+        {
+            const float tt = (float) i / 44100.0f;
+            smp[i] = std::sin (6.2831853f * 65.4f * tt + 2.0f * std::exp (-tt * 12.0f) * std::sin (6.2831853f * 130.8f * tt)) * std::exp (-tt * 5.0f);
+        }
+        p.sample = smp.data(); p.sampleLen = (int) smp.size(); p.sampleRate = 44100.0;
+    }
     acid::Transport t;
     t.playing = true; t.bpm = bpm;
 

@@ -25,6 +25,11 @@ struct EngineParams
     float glitchMix = 1.0f;
     float crush = 0.0f;
     float downsample = 0.0f;
+
+    // Optional sample that replaces the oscillator (owned by the caller).
+    const float* sample = nullptr;
+    int    sampleLen = 0;
+    double sampleRate = 44100.0;
 };
 
 struct Transport
@@ -73,7 +78,12 @@ public:
     // Renders n mono samples into out.
     void process (float* out, int n, const Transport& t, const EngineParams& p)
     {
-        voice.setParams (p.voice);
+        AcidVoice::Params vp = p.voice;
+        vp.sample      = p.sample;
+        vp.sampleLen   = p.sampleLen;
+        vp.sampleRatio = (float) (p.sampleRate / sr);
+        vp.refNote     = p.seqOn ? 36.0f + (float) p.root : 60.0f;   // root step / C5 = original pitch
+        voice.setParams (vp);
 
         static const double rateLen[] = { 0.5, 0.25, 1.0 / 6.0, 0.125 };
         const double L = rateLen[p.rate < 0 ? 0 : (p.rate > 3 ? 3 : p.rate)];
@@ -218,7 +228,7 @@ private:
             if (pick < 4)       type = 1;
             else if (pick < 6)  type = 2;
             else if (pick < 7)  type = 3;
-            else              { type = 1; burst = 0.55f; }   // crushed stutter
+            else              { type = 1; burst = 0.4f; }   // crushed stutter
         }
 
         switch (type)

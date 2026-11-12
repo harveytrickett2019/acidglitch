@@ -19,6 +19,12 @@ public:
         float accent   = 0.6f;    // 0..1
         float slideS   = 0.06f;   // glide time (seconds)
         float drive    = 0.3f;    // 0..1
+
+        // Optional sample source. When set, it replaces the oscillator.
+        const float* sample = nullptr;
+        int   sampleLen   = 0;
+        float sampleRatio = 1.0f;    // sample's rate / engine rate
+        float refNote     = 60.0f;   // note at which the sample plays at its original pitch
     };
 
     void prepare (double sampleRate)
@@ -66,6 +72,7 @@ public:
             curNote = midiNote;
             fEnv = 1.0f;
             attack = true;
+            samplePos = 0.0;
         }
         gate = true;
     }
@@ -77,16 +84,31 @@ public:
     {
         // pitch
         if (gliding) curNote += (targetNote - curNote) * glideCoef;
-        const float freq = 440.0f * std::exp2 ((curNote - 69.0f) * (1.0f / 12.0f));
-        const float dt = std::min (0.45f, freq / sr);
-        phase += dt;
-        if (phase >= 1.0f) phase -= 1.0f;
+        float osc = 0.0f;
+        if (p.sample != nullptr)
+        {
+            // sample playback, pitched relative to refNote (one-shot)
+            const int i0 = (int) samplePos;
+            if (i0 >= 0 && i0 + 1 < p.sampleLen)
+            {
+                const float fr = (float) (samplePos - (double) i0);
+                osc = p.sample[i0] + (p.sample[i0 + 1] - p.sample[i0]) * fr;
+            }
+            samplePos += (double) (std::exp2 ((curNote - p.refNote) * (1.0f / 12.0f)) * p.sampleRatio);
+        }
+        else
+        {
+            const float freq = 440.0f * std::exp2 ((curNote - 69.0f) * (1.0f / 12.0f));
+            const float dt = std::min (0.45f, freq / sr);
+            phase += dt;
+            if (phase >= 1.0f) phase -= 1.0f;
 
-        // oscillator (band-limited saw / square)
-        const float saw = 2.0f * phase - 1.0f - blep (phase, dt);
-        float ph2 = phase + 0.5f; if (ph2 >= 1.0f) ph2 -= 1.0f;
-        const float sq = (phase < 0.5f ? 1.0f : -1.0f) + blep (phase, dt) - blep (ph2, dt);
-        const float osc = saw + (sq * 0.8f - saw) * p.wave;
+            // oscillator (band-limited saw / square)
+            const float saw = 2.0f * phase - 1.0f - blep (phase, dt);
+            float ph2 = phase + 0.5f; if (ph2 >= 1.0f) ph2 -= 1.0f;
+            const float sq = (phase < 0.5f ? 1.0f : -1.0f) + blep (phase, dt) - blep (ph2, dt);
+            osc = saw + (sq * 0.8f - saw) * p.wave;
+        }
 
         // envelopes
         fEnv *= accented ? accDecay : decayCoef;
@@ -107,8 +129,8 @@ public:
 
         // filter cutoff: knob + envelope + accent sweep
         cutSm += (p.cutoffHz - cutSm) * cutSmooth;
-        const float oct = p.envMod * (5.0f * fEnv - 1.0f) + p.accent * 1.8f * accState;
-        const float fc = std::clamp (cutSm * std::exp2 (oct), 20.0f, std::min (16000.0f, 0.45f * sr));
+        const float oct = p.envMod * (6.5f * fEnv - 1.0f) + p.accent * 2.0f * accState;
+        const float fc = std::clamp (cutSm * std::exp2 (oct), 20.0f, std::min (19000.0f, 0.45f * sr));
 
         // zero-delay-feedback 4-pole ladder with a saturating input
         const float g = std::tan (3.14159265f * fc / sr);
@@ -146,6 +168,7 @@ private:
 
     Params p;
     float sr = 44100.0f;
+    double samplePos = 0.0;
     float phase = 0.0f, curNote = 36.0f, targetNote = 36.0f;
     float s1 = 0, s2 = 0, s3 = 0, s4 = 0;
     float fEnv = 0, amp = 0, accState = 0, accGain = 1, cutSm = 500, dcX = 0, dcY = 0;
